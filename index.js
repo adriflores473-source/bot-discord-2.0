@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const client = new Client({
     intents: [
@@ -9,9 +9,60 @@ const client = new Client({
     ]
 });
 
+// -------------------------------------------------------------
+// CONFIGURACIÓN DE IDs Y TOKEN
+// -------------------------------------------------------------
 const LOG_CHANNEL_ID = '1537858405761552424';
-const STAFF_ROLE_ID = '1532166214225494206'; // Rol autorizado
-const OWNER_ID = '1286812839465717772';       // Tu ID de Discord (Marcos)
+const STAFF_ROLE_ID = '1532166214225494206'; 
+const OWNER_ID = '1286812839465717772';       
+const TOKEN = process.env.DISCORD_TOKEN;
+
+// -------------------------------------------------------------
+// REGISTRO AUTOMÁTICO DE COMANDOS AL ENCENDER
+// -------------------------------------------------------------
+const commands = [
+    new SlashCommandBuilder()
+        .setName('mute')
+        .setDescription('Aísla temporalmente a un usuario')
+        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario a mutear').setRequired(true))
+        .addStringOption(opt => opt.setName('duracion').setDescription('Duración (ej: 10m, 1h, 1d)').setRequired(true))
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón de la sanción').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('unmute')
+        .setDescription('Quita el aislamiento a un usuario')
+        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario a desmutear').setRequired(true))
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
+
+    new SlashCommandBuilder()
+        .setName('ban')
+        .setDescription('Banea a un usuario del servidor')
+        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario a banear').setRequired(true))
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón del baneo').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('kick')
+        .setDescription('Expulsa a un usuario del servidor')
+        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario a expulsar').setRequired(true))
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón de la expulsión').setRequired(true))
+];
+
+client.once('ready', async () => {
+    console.log(`🤖 Bot encendido como: ${client.user.tag}`);
+
+    // Registrar comandos automáticamente en Discord al iniciar
+    const rest = new REST({ version: '10' }).setToken(TOKEN);
+    try {
+        console.log('🔄 Sincronizando comandos con Discord...');
+        await rest.put(
+            Routes.applicationCommands(client.user.id),
+            { body: commands }
+        );
+        console.log('✅ ¡Comandos cargados automáticamente!');
+    } catch (error) {
+        console.error('❌ Error al registrar comandos:', error);
+    }
+});
 
 // -------------------------------------------------------------
 // 1. FILTRO DE MALAS PALABRAS
@@ -19,23 +70,13 @@ const OWNER_ID = '1286812839465717772';       // Tu ID de Discord (Marcos)
 const badWords = [
     'mierda', 'carajo', 'maldito', 'bastardo', 'estupido', 'imbecil', 'tarado', 'retrasado', 'idiota', 'hdp',
     'inutil', 'subnormal', 'maricon', 'maldita', 'estupida', 'imbeciles', 'desgraciado', 'sorrete',
-
-    // Argentina / Uruguay
     'boludo', 'pelotudo', 'concha', 'conchuda', 'chupala', 'forro', 'orto', 'pajero', 'paja', 'gorreado', 
     'cagon', 'pija', 'choto', 'chota', 'forra', 'pelotuda', 'boluda', 'sorete', 'conchudo',
-
-    // México / Centroamérica
     'pendejo', 'pendeja', 'cabron', 'cabrona', 'verga', 'pinche', 'chinga', 'chingar', 'chingada', 'chingon',
     'culero', 'culera', 'joto', 'wuey', 'wey', 'mamon', 'mamona', 'putiza', 'pendejada',
-
-    // España
     'joder', 'cono', 'polla', 'capullo', 'gilipollas', 'hostia', 'follar', 'capulla', 'gilipolla',
-
-    // Colombia / Venezuela / Chile / Perú
     'gonorrea', 'malparido', 'malparida', 'mamaguevo', 'weon', 'weona', 'culiao', 'culiada',
     'chuchatumadre', 'ctm', 'ptm', 'huevon', 'huevona', 'pichula', 'cojudo', 'cojuda',
-
-    // Insultos comunes en Gaming / Redes
     'noob', 'pvto', 'pvta', 'mrd', 'puto', 'puta'
 ];
 
@@ -43,7 +84,6 @@ client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.guild) return;
 
     const content = message.content.toLowerCase();
-    
     const hasBadWord = badWords.some(word => {
         const regex = new RegExp(`\\b${word}\\b`, 'i');
         return regex.test(content) || content.includes(word);
@@ -52,7 +92,6 @@ client.on('messageCreate', async (message) => {
     if (hasBadWord) {
         try {
             await message.delete();
-            
             const warningMsg = await message.channel.send(`⚠️ ${message.author}, por favor mantén el respeto y evita usar lenguaje inapropiado.`);
             setTimeout(() => warningMsg.delete().catch(() => {}), 5000);
 
@@ -70,15 +109,14 @@ client.on('messageCreate', async (message) => {
                 await logChannel.send({ embeds: [embed] });
             }
         } catch (error) {
-            console.error('Error al procesar la mala palabra:', error);
+            console.error('Error en filtro:', error);
         }
     }
 });
 
 // -------------------------------------------------------------
-// 2. COMANDOS DE MODERACIÓN CON CONTROL DE PERMISOS
+// 2. COMANDOS DE MODERACIÓN
 // -------------------------------------------------------------
-
 function parseDuration(durationStr) {
     const match = durationStr.match(/^(\d+)([mhd])$/);
     if (!match) return null;
@@ -95,15 +133,11 @@ client.on('interactionCreate', async (interaction) => {
 
     const { commandName, options, guild, user: staff, member } = interaction;
 
-    // --- VERIFICACIÓN DE PERMISOS ---
     const isOwner = staff.id === OWNER_ID;
     const hasStaffRole = member.roles.cache.has(STAFF_ROLE_ID);
 
     if (!isOwner && !hasStaffRole) {
-        return interaction.reply({ 
-            content: '❌ No tienes permisos para usar este comando de moderación.', 
-            ephemeral: true 
-        });
+        return interaction.reply({ content: '❌ No tienes permisos para usar este comando.', ephemeral: true });
     }
 
     const targetUser = options.getUser('usuario');
@@ -113,17 +147,11 @@ client.on('interactionCreate', async (interaction) => {
     try {
         const targetMember = await guild.members.fetch(targetUser.id).catch(() => null);
 
-        // --- /MUTE ---
         if (commandName === 'mute') {
             const durationStr = options.getString('duracion');
             const ms = parseDuration(durationStr);
-            
-            if (!ms) {
-                return interaction.reply({ content: '❌ Duración inválida. Usa `m` (minutos), `h` (horas) o `d` (días). Ej: `10m`, `1h`', ephemeral: true });
-            }
-            if (!targetMember || !targetMember.moderatable) {
-                return interaction.reply({ content: '❌ No puedo mutear a este usuario.', ephemeral: true });
-            }
+            if (!ms) return interaction.reply({ content: '❌ Duración inválida. Ej: `10m`, `1h`', ephemeral: true });
+            if (!targetMember || !targetMember.moderatable) return interaction.reply({ content: '❌ No puedo mutear a este usuario.', ephemeral: true });
 
             await targetMember.timeout(ms, reason);
             await interaction.reply({ content: `✅ **${targetUser.tag}** fue muteado por ${durationStr}.`, ephemeral: true });
@@ -142,11 +170,8 @@ client.on('interactionCreate', async (interaction) => {
                 await logChannel.send({ embeds: [embed] });
             }
 
-        // --- /UNMUTE ---
         } else if (commandName === 'unmute') {
-            if (!targetMember || !targetMember.isCommunicationDisabled()) {
-                return interaction.reply({ content: '❌ Este usuario no está muteado.', ephemeral: true });
-            }
+            if (!targetMember || !targetMember.isCommunicationDisabled()) return interaction.reply({ content: '❌ Este usuario no está muteado.', ephemeral: true });
 
             await targetMember.timeout(null, reason);
             await interaction.reply({ content: `✅ Se le quitó el mute a **${targetUser.tag}**.`, ephemeral: true });
@@ -164,11 +189,8 @@ client.on('interactionCreate', async (interaction) => {
                 await logChannel.send({ embeds: [embed] });
             }
 
-        // --- /BAN ---
         } else if (commandName === 'ban') {
-            if (!targetMember || !targetMember.bannable) {
-                return interaction.reply({ content: '❌ No puedo banear a este usuario.', ephemeral: true });
-            }
+            if (!targetMember || !targetMember.bannable) return interaction.reply({ content: '❌ No puedo banear a este usuario.', ephemeral: true });
 
             await guild.members.ban(targetUser.id, { reason });
             await interaction.reply({ content: `✅ **${targetUser.tag}** fue baneado del servidor.`, ephemeral: true });
@@ -186,11 +208,8 @@ client.on('interactionCreate', async (interaction) => {
                 await logChannel.send({ embeds: [embed] });
             }
 
-        // --- /KICK ---
         } else if (commandName === 'kick') {
-            if (!targetMember || !targetMember.kickable) {
-                return interaction.reply({ content: '❌ No puedo expulsar a este usuario.', ephemeral: true });
-            }
+            if (!targetMember || !targetMember.kickable) return interaction.reply({ content: '❌ No puedo expulsar a este usuario.', ephemeral: true });
 
             await targetMember.kick(reason);
             await interaction.reply({ content: `✅ **${targetUser.tag}** fue expulsado del servidor.`, ephemeral: true });
@@ -214,4 +233,4 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-client.login(process.env.DISCORD_TOKEN);
+client.login(TOKEN);
