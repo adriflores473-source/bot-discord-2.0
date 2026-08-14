@@ -213,3 +213,5 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: '❌ Hubo un error al ejecutar el comando.', ephemeral: true });
     }
 });
+
+client.login(process.env.DISCORD_TOKEN);
