@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = '1531742804844216450';
@@ -20,13 +20,15 @@ if (TOKEN) {
   })();
 }
 
-// 2. Configurar permisos del Bot
+// 2. Configurar cliente con Intenciones
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
   ],
+  partials: [Partials.Channel, Partials.Message]
 });
 
 client.once('ready', () => {
@@ -34,53 +36,56 @@ client.once('ready', () => {
 });
 
 // ==========================================
-// 3. LISTA EXTENSA DE PALABRAS PROHIBIDAS
+// 3. LISTA AMPLIADA DE PALABRAS PROHIBIDAS
 // ==========================================
 const groserias = [
-  // Generales / Neutras
+  // Generales e Insultos Comunes
   'mierda', 'carajo', 'maldito', 'bastardo', 'estupido', 'imbecil', 'tarado', 'retrasado', 'idiota', 'hdp',
+  'inutil', 'subnormal', 'maricon', 'maldita', 'estupida', 'imbeciles', 'desgraciado', 'sorrete',
 
   // Argentina / Uruguay
-  'boludo', 'pelotudo', 'concha', 'conchuda', 'chupala', 'forro', 'orto', 'pajero', 'paja', 'gorreado', 'cagón', 'pija',
+  'boludo', 'pelotudo', 'concha', 'conchuda', 'chupala', 'forro', 'orto', 'pajero', 'paja', 'gorreado', 
+  'cagon', 'pija', 'choto', 'chota', 'forra', 'pelotuda', 'boluda', 'sorete', 'conchudo',
 
   // México / Centroamérica
-  'pendejo', 'cabron', 'verga', 'pinche', 'chinga', 'chingar', 'chingada', 'culero', 'joto', 'wuey', 'wey',
+  'pendejo', 'pendeja', 'cabron', 'cabrona', 'verga', 'pinche', 'chinga', 'chingar', 'chingada', 'chingon',
+  'culero', 'culera', 'joto', 'wuey', 'wey', 'mamon', 'mamona', 'putiza', 'pendejada',
 
   // España
-  'joder', 'coño', 'polla', 'capullo', 'gilipollas', 'hostia', 'follar', 'ostia',
+  'joder', 'cono', 'polla', 'capullo', 'gilipollas', 'hostia', 'follar',  'capulla', 'gilipolla',
 
   // Colombia / Venezuela / Chile / Perú
-  'gonorrea', 'malparido', 'mamaguevo', 'mamaguevo', 'weon', 'maldita', 'culiao', 'chuchatumadre', 'ctm', 'ptm'
+  'gonorrea', 'malparido', 'malparida', 'mamaguevo', 'mamaguevo', 'weon', 'weona', 'culiao', 'culiada',
+  'chuchatumadre', 'ctm', 'ptm', 'huevon', 'huevona', 'pichula', 'cojudo', 'cojuda',
+
+  // Insultos comunes en Gaming / Redes
+  'noob', 'pvto', 'pvta', 'mrd', 'puto', 'puta'
 ];
 
 // ==========================================
-// 4. DETECTOR DE GROSERÍAS INTELIGENTE
+// 4. DETECTOR DE MENSAJES Y RESPUESTA
 // ==========================================
 client.on('messageCreate', async (message) => {
-  // Ignorar si el mensaje proviene de un bot
+  // Ignorar mensajes enviados por bots
   if (message.author.bot) return;
 
-  // Convertimos a minúsculas y limpiamos signos de puntuación (comas, puntos, signos de exclamación)
-  const textoLimpio = message.content
+  // Normalizamos el texto: quitamos tildes, signos y saltos de línea
+  const textoNormalizado = message.content
     .toLowerCase()
-    .replace(/[.,/#!$%^&*;:{}=\-_`~()¿?¡!]/g, '');
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, ' ');
 
-  // Separamos el texto en palabras individuales
-  const palabrasEnMensaje = textoLimpio.split(/\s+/);
+  const palabras = textoNormalizado.split(/\s+/);
 
-  // Verificamos si alguna palabra de la lista coincide exactamente con una del mensaje
-  const contieneGroseria = palabrasEnMensaje.some(palabra => groserias.includes(palabra));
+  const tieneGroseria = palabras.some(p => groserias.includes(p));
 
-  if (contieneGroseria) {
-    // 1. Borra el mensaje grosero (requiere que el bot tenga permiso "Administrar Mensajes")
+  if (tieneGroseria) {
     try {
-      await message.delete();
-    } catch (error) {
-      console.log('No se pudo borrar el mensaje (asegúrate de que el bot tenga permisos).');
+      // Responde directamente al mensaje citándolo y etiquetando al usuario
+      await message.reply(`⚠️ <@${message.author.id}>, cuidemos el lenguaje en el servidor.`);
+    } catch (err) {
+      console.error('Error al responder el mensaje:', err);
     }
-
-    // 2. Le envía una advertencia al usuario
-    await message.channel.send(`⚠️ <@${message.author.id}>, por favor mantengamos el respeto en el servidor. Tu mensaje fue eliminado.`);
   }
 });
 
