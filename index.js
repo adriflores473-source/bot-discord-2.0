@@ -15,11 +15,11 @@ const client = new Client({
 const LOG_CHANNEL_ID = '1537858405761552424';
 const STAFF_ROLE_ID = '1532166214225494206';       // Rol de Staff autorizado
 const OWNER_ID = '1286812839465717772';             // Tu ID (Marcos)
-const USER_ROLE_TO_LOCK = '1532166292130500648';    // Rol a bloquear con /lock
+const USER_ROLE_TO_LOCK = '1532166292130500648';    // Rol a bloquear
 const TOKEN = process.env.DISCORD_TOKEN;
 
 // -------------------------------------------------------------
-// REGISTRO AUTOMÁTICO DE COMANDOS EN DISCORD
+// REGISTRO AUTOMÁTICO DE COMANDOS DE MODERACIÓN
 // -------------------------------------------------------------
 const commands = [
     new SlashCommandBuilder()
@@ -61,7 +61,28 @@ const commands = [
         .setName('slowmode')
         .setDescription('Establece el modo lento en el canal (0 para desactivar)')
         .addIntegerOption(opt => opt.setName('segundos').setDescription('Segundos de espera entre mensajes').setRequired(true))
-        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false))
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
+
+    new SlashCommandBuilder()
+        .setName('disablecommands')
+        .setDescription('Desactiva los comandos del bot en este canal para los usuarios')
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
+
+    new SlashCommandBuilder()
+        .setName('enablecommands')
+        .setDescription('Vuelve a activar los comandos del bot en este canal')
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
+
+    new SlashCommandBuilder()
+        .setName('cleanchat')
+        .setDescription('Elimina una cantidad de mensajes en el chat')
+        .addIntegerOption(opt => opt.setName('cantidad').setDescription('Cantidad de mensajes a borrar (1 - 100)').setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName('clearuser')
+        .setDescription('Borra únicamente los mensajes de un usuario específico en este canal')
+        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario al que se le borrarán los mensajes').setRequired(true))
+        .addIntegerOption(opt => opt.setName('cantidad').setDescription('Cantidad de mensajes a revisar (1 - 100)').setRequired(true))
 ];
 
 client.once('ready', async () => {
@@ -74,14 +95,14 @@ client.once('ready', async () => {
             Routes.applicationCommands(client.user.id),
             { body: commands }
         );
-        console.log('✅ ¡Todos los comandos cargados con éxito!');
+        console.log('✅ ¡Comandos de moderación cargados con éxito!');
     } catch (error) {
         console.error('❌ Error al registrar comandos:', error);
     }
 });
 
 // -------------------------------------------------------------
-// 1. FILTRO DE MALAS PALABRAS
+// 1. FILTRO AUTOMÁTICO DE PALABRAS PROHIBIDAS
 // -------------------------------------------------------------
 const badWords = [
     'mierda', 'carajo', 'maldito', 'bastardo', 'estupido', 'imbecil', 'tarado', 'retrasado', 'idiota', 'hdp',
@@ -131,7 +152,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // -------------------------------------------------------------
-// 2. COMANDOS DE MODERACIÓN Y CONTROL
+// 2. EJECUCIÓN DE COMANDOS DE MODERACIÓN
 // -------------------------------------------------------------
 function parseDuration(durationStr) {
     const match = durationStr.match(/^(\d+)([mhd])$/);
@@ -324,11 +345,124 @@ client.on('interactionCreate', async (interaction) => {
                     .setTimestamp();
                 await logChannel.send({ embeds: [embed] });
             }
+
+        // --- /DISABLECOMMANDS ---
+        } else if (commandName === 'disablecommands') {
+            await channel.permissionOverwrites.edit(guild.roles.everyone, { UseApplicationCommands: false });
+            await channel.permissionOverwrites.edit(USER_ROLE_TO_LOCK, { UseApplicationCommands: false }).catch(() => {});
+
+            await interaction.reply({ content: `🚫 **Comandos desactivados** en este canal por ${staff}.\n**Razón:** ${reason}` });
+
+            if (logChannel) {
+                const embed = new EmbedBuilder()
+                    .setTitle('🛡️ REGISTRO DE MODERACIÓN - DISABLECOMMANDS')
+                    .setColor(0xE67E22)
+                    .addFields(
+                        { name: 'Canal', value: `${channel}`, inline: true },
+                        { name: 'Staff responsable', value: `${staff} (${staff.tag})`, inline: true },
+                        { name: 'Razón', value: reason }
+                    )
+                    .setTimestamp();
+                await logChannel.send({ embeds: [embed] });
+            }
+
+        // --- /ENABLECOMMANDS ---
+        } else if (commandName === 'enablecommands') {
+            await channel.permissionOverwrites.edit(guild.roles.everyone, { UseApplicationCommands: null });
+            await channel.permissionOverwrites.edit(USER_ROLE_TO_LOCK, { UseApplicationCommands: null }).catch(() => {});
+
+            await interaction.reply({ content: `🟢 **Comandos reactivados** en este canal por ${staff}.\n**Razón:** ${reason}` });
+
+            if (logChannel) {
+                const embed = new EmbedBuilder()
+                    .setTitle('🛡️ REGISTRO DE MODERACIÓN - ENABLECOMMANDS')
+                    .setColor(0x2ECC71)
+                    .addFields(
+                        { name: 'Canal', value: `${channel}`, inline: true },
+                        { name: 'Staff responsable', value: `${staff} (${staff.tag})`, inline: true },
+                        { name: 'Razón', value: reason }
+                    )
+                    .setTimestamp();
+                await logChannel.send({ embeds: [embed] });
+            }
+
+        // --- /CLEANCHAT ---
+        } else if (commandName === 'cleanchat') {
+            const amount = options.getInteger('cantidad');
+
+            if (amount < 1 || amount > 100) {
+                return interaction.reply({ content: '❌ La cantidad debe estar entre 1 y 100.', ephemeral: true });
+            }
+
+            const deleted = await channel.bulkDelete(amount, true).catch(() => null);
+
+            if (!deleted) {
+                return interaction.reply({ content: '❌ No se pudieron borrar los mensajes (mensajes de más de 14 días no se pueden borrar en masa).', ephemeral: true });
+            }
+
+            await interaction.reply({ content: `🧹 **${deleted.size} mensajes borrados** del chat por ${staff}.` });
+
+            if (logChannel) {
+                const embed = new EmbedBuilder()
+                    .setTitle('🛡️ REGISTRO DE MODERACIÓN - CLEANCHAT')
+                    .setColor(0x9B59B6)
+                    .addFields(
+                        { name: 'Canal', value: `${channel}`, inline: true },
+                        { name: 'Mensajes borrados', value: `${deleted.size}`, inline: true },
+                        { name: 'Staff responsable', value: `${staff} (${staff.tag})`, inline: true }
+                    )
+                    .setTimestamp();
+                await logChannel.send({ embeds: [embed] });
+            }
+
+        // --- /CLEARUSER ---
+        } else if (commandName === 'clearuser') {
+            const targetUser = options.getUser('usuario');
+            const amount = options.getInteger('cantidad');
+
+            if (amount < 1 || amount > 100) {
+                return interaction.reply({ content: '❌ La cantidad debe estar entre 1 y 100.', ephemeral: true });
+            }
+
+            await interaction.deferReply(); // Damos margen por si tarda unos segundos buscando mensajes
+
+            const messages = await channel.messages.fetch({ limit: amount });
+            const userMessages = messages.filter(m => m.author.id === targetUser.id);
+
+            if (userMessages.size === 0) {
+                return interaction.editReply({ content: `❌ No se encontraron mensajes recientes de ${targetUser} entre los últimos ${amount} mensajes.` });
+            }
+
+            const deleted = await channel.bulkDelete(userMessages, true).catch(() => null);
+
+            if (!deleted) {
+                return interaction.editReply({ content: '❌ Ocurrió un error o los mensajes son demasiado antiguos (más de 14 días).' });
+            }
+
+            await interaction.editReply({ content: `🧹 Se borraron **${deleted.size} mensajes** de ${targetUser} por ${staff}.` });
+
+            if (logChannel) {
+                const embed = new EmbedBuilder()
+                    .setTitle('🛡️ REGISTRO DE MODERACIÓN - CLEARUSER')
+                    .setColor(0x9B59B6)
+                    .addFields(
+                        { name: 'Usuario afectado', value: `${targetUser} (${targetUser.tag})`, inline: true },
+                        { name: 'Canal', value: `${channel}`, inline: true },
+                        { name: 'Mensajes borrados', value: `${deleted.size}`, inline: true },
+                        { name: 'Staff responsable', value: `${staff} (${staff.tag})`, inline: true }
+                    )
+                    .setTimestamp();
+                await logChannel.send({ embeds: [embed] });
+            }
         }
 
     } catch (error) {
         console.error(error);
-        await interaction.reply({ content: '❌ Hubo un error al ejecutar este comando.', ephemeral: true });
+        if (interaction.deferred || interaction.replied) {
+            await interaction.followUp({ content: '❌ Hubo un error al ejecutar este comando.', ephemeral: true });
+        } else {
+            await interaction.reply({ content: '❌ Hubo un error al ejecutar este comando.', ephemeral: true });
+        }
     }
 });
 
