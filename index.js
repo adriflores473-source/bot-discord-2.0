@@ -1,27 +1,48 @@
-const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, AttachmentBuilder } = require('discord.js');
+const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
 
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
 // -------------------------------------------------------------
 // CONFIGURACIÓN DE IDs Y TOKEN
 // -------------------------------------------------------------
-const LOG_CHANNEL_ID = '1537858405761552424';
-const STAFF_ROLE_ID = '1532166214225494206';       // Rol de Staff autorizado
+const STAFF_ROLE_ID = '1532166214225494206';       // Rol de Staff
 const OWNER_ID = '1286812839465717772';             // Tu ID (Marcos)
 const USER_ROLE_TO_LOCK = '1532166292130500648';    // Rol a bloquear
 const TOKEN = process.env.DISCORD_TOKEN;
 
+// Guardado dinámico de configuración de logs por servidor
+const logChannels = {}; 
+// Imagen de bienvenida de Pinterest
+const WELCOME_BACKGROUND_URL = 'https://i.pinimg.com/1200x/c6/f9/2f/c6f92f691b52ca0967ce7a3705ef776d.jpg';
+
 // -------------------------------------------------------------
-// REGISTRO AUTOMÁTICO DE COMANDOS DE MODERACIÓN
+// REGISTRO DE COMANDOS SLASH
 // -------------------------------------------------------------
 const commands = [
+    new SlashCommandBuilder()
+        .setName('setlogs')
+        .setDescription('Configura el canal para los registros de moderación y eventos')
+        .addChannelOption(opt => opt.setName('canal').setDescription('Canal donde se enviarán los logs').setRequired(true))
+        .addStringOption(opt => opt.setName('tipo').setDescription('Selecciona qué tipo de eventos registrar')
+            .setRequired(true)
+            .addChoices(
+                { name: '🌐 Todos los logs (Incluye Bienvenidas)', value: 'todos_los_logs' },
+                { name: '🛑 Todos menos Bienvenida', value: 'todos_menos_bienvenida' },
+                { name: '🖼️ Solo Bienvenida con Imagen', value: 'bienvenida_imagen' },
+                { name: '🔨 Solo Sanciones/Moderación', value: 'logs_bans' },
+                { name: '🎙️ Solo Canales y Voz', value: 'logs_canales' },
+                { name: '🎭 Solo Gestión de Roles', value: 'logs_roles' }
+            )),
+
     new SlashCommandBuilder()
         .setName('mute')
         .setDescription('Aísla temporalmente a un usuario')
@@ -49,60 +70,260 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('lock')
-        .setDescription('Bloquea el canal actual para que no puedan escribir')
-        .addStringOption(opt => opt.setName('razon').setDescription('Razón del bloqueo').setRequired(false)),
+        .setDescription('Bloquea el canal actual')
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
 
     new SlashCommandBuilder()
         .setName('unlock')
         .setDescription('Desbloquea el canal actual')
-        .addStringOption(opt => opt.setName('razon').setDescription('Razón del desbloqueo').setRequired(false)),
+        .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
 
     new SlashCommandBuilder()
         .setName('slowmode')
-        .setDescription('Establece el modo lento en el canal (0 para desactivar)')
-        .addIntegerOption(opt => opt.setName('segundos').setDescription('Segundos de espera entre mensajes').setRequired(true))
+        .setDescription('Establece el modo lento en el canal')
+        .addIntegerOption(opt => opt.setName('segundos').setDescription('Segundos de espera').setRequired(true))
         .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
 
     new SlashCommandBuilder()
         .setName('disablecommands')
-        .setDescription('Desactiva los comandos del bot en este canal para los usuarios')
+        .setDescription('Desactiva comandos en el canal')
         .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
 
     new SlashCommandBuilder()
         .setName('enablecommands')
-        .setDescription('Vuelve a activar los comandos del bot en este canal')
+        .setDescription('Habilita comandos en el canal')
         .addStringOption(opt => opt.setName('razon').setDescription('Razón').setRequired(false)),
 
     new SlashCommandBuilder()
         .setName('cleanchat')
-        .setDescription('Elimina una cantidad de mensajes en el chat')
-        .addIntegerOption(opt => opt.setName('cantidad').setDescription('Cantidad de mensajes a borrar (1 - 100)').setRequired(true)),
+        .setDescription('Elimina una cantidad de mensajes')
+        .addIntegerOption(opt => opt.setName('cantidad').setDescription('Cantidad (1 - 100)').setRequired(true)),
 
     new SlashCommandBuilder()
         .setName('clearuser')
-        .setDescription('Borra únicamente los mensajes de un usuario específico en este canal')
-        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario al que se le borrarán los mensajes').setRequired(true))
+        .setDescription('Borra únicamente los mensajes de un usuario')
+        .addUserOption(opt => opt.setName('usuario').setDescription('Usuario').setRequired(true))
         .addIntegerOption(opt => opt.setName('cantidad').setDescription('Cantidad de mensajes a revisar (1 - 100)').setRequired(true))
 ];
 
 client.once('ready', async () => {
     console.log(`🤖 Bot encendido como: ${client.user.tag}`);
-
     const rest = new REST({ version: '10' }).setToken(TOKEN);
     try {
-        console.log('🔄 Sincronizando comandos con Discord...');
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: commands }
-        );
-        console.log('✅ ¡Comandos de moderación cargados con éxito!');
+        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+        console.log('✅ Comandos registrados con éxito.');
     } catch (error) {
         console.error('❌ Error al registrar comandos:', error);
     }
 });
 
+// Función para obtener el canal de logs según la categoría configurada
+function getLogChannel(guildId, category) {
+    const config = logChannels[guildId];
+    if (!config) return null;
+    if (config.types.includes('todos_los_logs')) return config.channelId;
+    if (config.types.includes('todos_menos_bienvenida') && category !== 'bienvenida_imagen') return config.channelId;
+    if (config.types.includes(category)) return config.channelId;
+    return null;
+}
+
 // -------------------------------------------------------------
-// 1. FILTRO AUTOMÁTICO DE PALABRAS PROHIBIDAS
+// SISTEMA DE TARJETA DE BIENVENIDA CON CANVAS
+// -------------------------------------------------------------
+client.on('guildMemberAdd', async (member) => {
+    const channelId = getLogChannel(member.guild.id, 'bienvenida_imagen');
+    if (!channelId) return;
+
+    const channel = member.guild.channels.cache.get(channelId);
+    if (!channel) return;
+
+    try {
+        const canvas = createCanvas(1200, 675);
+        const ctx = canvas.getContext('2d');
+
+        // Fondo
+        const background = await loadImage(WELCOME_BACKGROUND_URL);
+        ctx.drawImage(background, 0, 0, canvas.width, canvas.height);
+
+        // Capa oscura para legibilidad
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Borde circular del Avatar
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(600, 230, 105, 0, Math.PI * 2, true);
+        ctx.closePath();
+        ctx.lineWidth = 10;
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.stroke();
+
+        // Recorte circular para el Avatar
+        ctx.beginPath();
+        ctx.arc(600, 230, 100, 0, Math.PI * 2, true);
+        ctx.closePath();
+        ctx.clip();
+
+        const avatarURL = member.user.displayAvatarURL({ extension: 'png', size: 256 });
+        const avatar = await loadImage(avatarURL);
+        ctx.drawImage(avatar, 500, 130, 200, 200);
+        ctx.restore();
+
+        // Textos
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = 'bold 50px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('¡BIENVENIDO/A!', 600, 420);
+
+        ctx.font = 'bold 40px sans-serif';
+        ctx.fillStyle = '#00FFFF';
+        ctx.fillText(member.user.tag, 600, 480);
+
+        ctx.font = '30px sans-serif';
+        ctx.fillStyle = '#E0E0E0';
+        ctx.fillText(`Eres el miembro #${member.guild.memberCount}`, 600, 540);
+
+        const attachment = new AttachmentBuilder(await canvas.encode('png'), { name: 'bienvenida.png' });
+        await channel.send({ content: `👋 ¡Bienvenido/a al servidor ${member}!`, files: [attachment] });
+
+    } catch (error) {
+        console.error('Error al generar la tarjeta de bienvenida:', error);
+    }
+});
+
+// -------------------------------------------------------------
+// EVENTOS DE LOGS DE CANALES Y VOZ
+// -------------------------------------------------------------
+client.on('channelCreate', async (channel) => {
+    if (!channel.guild) return;
+    const logId = getLogChannel(channel.guild.id, 'logs_canales');
+    if (!logId) return;
+    const logChannel = channel.guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('📁 CANAL CREADO')
+        .setColor(0x2ECC71)
+        .addFields(
+            { name: 'Nombre', value: channel.name, inline: true },
+            { name: 'Tipo', value: `${channel.type}`, inline: true }
+        )
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] });
+});
+
+client.on('channelDelete', async (channel) => {
+    if (!channel.guild) return;
+    const logId = getLogChannel(channel.guild.id, 'logs_canales');
+    if (!logId) return;
+    const logChannel = channel.guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('🗑️ CANAL ELIMINADO')
+        .setColor(0xE74C3C)
+        .addFields({ name: 'Nombre', value: channel.name, inline: true })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] });
+});
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const guild = newState.guild || oldState.guild;
+    const logId = getLogChannel(guild.id, 'logs_canales');
+    if (!logId) return;
+    const logChannel = guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const member = newState.member || oldState.member;
+
+    if (!oldState.channelId && newState.channelId) {
+        const embed = new EmbedBuilder()
+            .setTitle('🎙️ CONEXIÓN A VOZ')
+            .setColor(0x3498DB)
+            .setDescription(`${member} se conectó al canal **${newState.channel.name}**`)
+            .setTimestamp();
+        await logChannel.send({ embeds: [embed] });
+    } else if (oldState.channelId && !newState.channelId) {
+        const embed = new EmbedBuilder()
+            .setTitle('🎙️ DESCONEXIÓN DE VOZ')
+            .setColor(0x95A5A6)
+            .setDescription(`${member} se desconectó de **${oldState.channel.name}**`)
+            .setTimestamp();
+        await logChannel.send({ embeds: [embed] });
+    }
+});
+
+// -------------------------------------------------------------
+// EVENTOS DE LOGS DE ROLES
+// -------------------------------------------------------------
+client.on('roleCreate', async (role) => {
+    const logId = getLogChannel(role.guild.id, 'logs_roles');
+    if (!logId) return;
+    const logChannel = role.guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('🎭 ROL CREADO')
+        .setColor(0x9B59B6)
+        .addFields({ name: 'Nombre del Rol', value: role.name, inline: true })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] });
+});
+
+client.on('roleDelete', async (role) => {
+    const logId = getLogChannel(role.guild.id, 'logs_roles');
+    if (!logId) return;
+    const logChannel = role.guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('🎭 ROL ELIMINADO')
+        .setColor(0xE74C3C)
+        .addFields({ name: 'Nombre del Rol', value: role.name, inline: true })
+        .setTimestamp();
+    await logChannel.send({ embeds: [embed] });
+});
+
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+    const logId = getLogChannel(newMember.guild.id, 'logs_roles');
+    if (!logId) return;
+    const logChannel = newMember.guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const addedRoles = newMember.roles.cache.filter(role => !oldMember.roles.cache.has(role.id));
+    const removedRoles = oldMember.roles.cache.filter(role => !newMember.roles.cache.has(role.id));
+
+    if (addedRoles.size > 0) {
+        addedRoles.forEach(async role => {
+            const embed = new EmbedBuilder()
+                .setTitle('🎭 ROL ASIGNADO')
+                .setColor(0x2ECC71)
+                .addFields(
+                    { name: 'Usuario', value: `${newMember} (${newMember.user.tag})`, inline: true },
+                    { name: 'Rol agregado', value: role.name, inline: true }
+                )
+                .setTimestamp();
+            await logChannel.send({ embeds: [embed] });
+        });
+    }
+
+    if (removedRoles.size > 0) {
+        removedRoles.forEach(async role => {
+            const embed = new EmbedBuilder()
+                .setTitle('🎭 ROL RETIRADO')
+                .setColor(0xE74C3C)
+                .addFields(
+                    { name: 'Usuario', value: `${newMember} (${newMember.user.tag})`, inline: true },
+                    { name: 'Rol removido', value: role.name, inline: true }
+                )
+                .setTimestamp();
+            await logChannel.send({ embeds: [embed] });
+        });
+    }
+});
+
+// -------------------------------------------------------------
+// FILTRO AUTOMÁTICO DE PALABRAS PROHIBIDAS
 // -------------------------------------------------------------
 const badWords = [
     'mierda', 'carajo', 'maldito', 'bastardo', 'estupido', 'imbecil', 'tarado', 'retrasado', 'idiota', 'hdp',
@@ -132,18 +353,21 @@ client.on('messageCreate', async (message) => {
             const warningMsg = await message.channel.send(`⚠️ ${message.author}, por favor mantén el respeto y evita usar lenguaje inapropiado.`);
             setTimeout(() => warningMsg.delete().catch(() => {}), 5000);
 
-            const logChannel = message.guild.channels.cache.get(LOG_CHANNEL_ID);
-            if (logChannel) {
-                const embed = new EmbedBuilder()
-                    .setTitle('🚨 FILTRO DE PALABRAS PROHIBIDAS')
-                    .setColor(0xE74C3C)
-                    .addFields(
-                        { name: 'Usuario', value: `${message.author} (${message.author.tag})`, inline: true },
-                        { name: 'Canal', value: `${message.channel}`, inline: true },
-                        { name: 'Mensaje borrado', value: `\`\`\`${message.content}\`\`\`` }
-                    )
-                    .setTimestamp();
-                await logChannel.send({ embeds: [embed] });
+            const logId = getLogChannel(message.guild.id, 'logs_bans');
+            if (logId) {
+                const logChannel = message.guild.channels.cache.get(logId);
+                if (logChannel) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('🚨 FILTRO DE PALABRAS PROHIBIDAS')
+                        .setColor(0xE74C3C)
+                        .addFields(
+                            { name: 'Usuario', value: `${message.author} (${message.author.tag})`, inline: true },
+                            { name: 'Canal', value: `${message.channel}`, inline: true },
+                            { name: 'Mensaje borrado', value: `\`\`\`${message.content}\`\`\`` }
+                        )
+                        .setTimestamp();
+                    await logChannel.send({ embeds: [embed] });
+                }
             }
         } catch (error) {
             console.error('Error en filtro:', error);
@@ -152,7 +376,7 @@ client.on('messageCreate', async (message) => {
 });
 
 // -------------------------------------------------------------
-// 2. EJECUCIÓN DE COMANDOS DE MODERACIÓN
+// EJECUCIÓN DE COMANDOS DE MODERACIÓN Y CONFIGURACIÓN
 // -------------------------------------------------------------
 function parseDuration(durationStr) {
     const match = durationStr.match(/^(\d+)([mhd])$/);
@@ -169,7 +393,6 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     const { commandName, options, guild, user: staff, member, channel } = interaction;
-
     const isOwner = staff.id === OWNER_ID;
     const hasStaffRole = member.roles.cache.has(STAFF_ROLE_ID);
 
@@ -178,11 +401,24 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     const reason = options.getString('razon') || 'Sin razón especificada';
-    const logChannel = guild.channels.cache.get(LOG_CHANNEL_ID);
+    const logId = getLogChannel(guild.id, 'logs_bans');
+    const logChannel = logId ? guild.channels.cache.get(logId) : null;
 
     try {
+        // --- /SETLOGS ---
+        if (commandName === 'setlogs') {
+            const targetChannel = options.getChannel('canal');
+            const logType = options.getString('tipo');
+
+            logChannels[guild.id] = {
+                channelId: targetChannel.id,
+                types: [logType]
+            };
+
+            await interaction.reply({ content: `✅ Canal ${targetChannel} configurado con éxito para registrar **${logType}**.` });
+
         // --- /MUTE ---
-        if (commandName === 'mute') {
+        } else if (commandName === 'mute') {
             const targetUser = options.getUser('usuario');
             const durationStr = options.getString('duracion');
             const ms = parseDuration(durationStr);
@@ -321,7 +557,7 @@ client.on('interactionCreate', async (interaction) => {
         } else if (commandName === 'slowmode') {
             const seconds = options.getInteger('segundos');
             if (seconds < 0 || seconds > 21600) {
-                return interaction.reply({ content: '❌ Los segundos deben estar entre 0 y 21600 (6 horas).', ephemeral: true });
+                return interaction.reply({ content: '❌ Los segundos deben estar entre 0 y 21600.', ephemeral: true });
             }
 
             await channel.setRateLimitPerUser(seconds, reason);
@@ -389,18 +625,12 @@ client.on('interactionCreate', async (interaction) => {
         // --- /CLEANCHAT ---
         } else if (commandName === 'cleanchat') {
             const amount = options.getInteger('cantidad');
-
-            if (amount < 1 || amount > 100) {
-                return interaction.reply({ content: '❌ La cantidad debe estar entre 1 y 100.', ephemeral: true });
-            }
+            if (amount < 1 || amount > 100) return interaction.reply({ content: '❌ Cantidad entre 1 y 100.', ephemeral: true });
 
             const deleted = await channel.bulkDelete(amount, true).catch(() => null);
+            if (!deleted) return interaction.reply({ content: '❌ No se pudieron borrar los mensajes.', ephemeral: true });
 
-            if (!deleted) {
-                return interaction.reply({ content: '❌ No se pudieron borrar los mensajes (mensajes de más de 14 días no se pueden borrar en masa).', ephemeral: true });
-            }
-
-            await interaction.reply({ content: `🧹 **${deleted.size} mensajes borrados** del chat por ${staff}.` });
+            await interaction.reply({ content: `🧹 **${deleted.size} mensajes borrados** por ${staff}.` });
 
             if (logChannel) {
                 const embed = new EmbedBuilder()
@@ -419,25 +649,16 @@ client.on('interactionCreate', async (interaction) => {
         } else if (commandName === 'clearuser') {
             const targetUser = options.getUser('usuario');
             const amount = options.getInteger('cantidad');
+            if (amount < 1 || amount > 100) return interaction.reply({ content: '❌ Cantidad entre 1 y 100.', ephemeral: true });
 
-            if (amount < 1 || amount > 100) {
-                return interaction.reply({ content: '❌ La cantidad debe estar entre 1 y 100.', ephemeral: true });
-            }
-
-            await interaction.deferReply(); // Damos margen por si tarda unos segundos buscando mensajes
-
+            await interaction.deferReply();
             const messages = await channel.messages.fetch({ limit: amount });
             const userMessages = messages.filter(m => m.author.id === targetUser.id);
 
-            if (userMessages.size === 0) {
-                return interaction.editReply({ content: `❌ No se encontraron mensajes recientes de ${targetUser} entre los últimos ${amount} mensajes.` });
-            }
+            if (userMessages.size === 0) return interaction.editReply({ content: `❌ Sin mensajes recientes de ${targetUser}.` });
 
             const deleted = await channel.bulkDelete(userMessages, true).catch(() => null);
-
-            if (!deleted) {
-                return interaction.editReply({ content: '❌ Ocurrió un error o los mensajes son demasiado antiguos (más de 14 días).' });
-            }
+            if (!deleted) return interaction.editReply({ content: '❌ No se pudieron borrar los mensajes.' });
 
             await interaction.editReply({ content: `🧹 Se borraron **${deleted.size} mensajes** de ${targetUser} por ${staff}.` });
 
@@ -459,9 +680,9 @@ client.on('interactionCreate', async (interaction) => {
     } catch (error) {
         console.error(error);
         if (interaction.deferred || interaction.replied) {
-            await interaction.followUp({ content: '❌ Hubo un error al ejecutar este comando.', ephemeral: true });
+            await interaction.followUp({ content: '❌ Ocurrió un error al ejecutar este comando.', ephemeral: true });
         } else {
-            await interaction.reply({ content: '❌ Hubo un error al ejecutar este comando.', ephemeral: true });
+            await interaction.reply({ content: '❌ Ocurrió un error al ejecutar este comando.', ephemeral: true });
         }
     }
 });
