@@ -1,5 +1,7 @@
 const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, AttachmentBuilder } = require('discord.js');
-const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
+const { createCanvas, loadImage } = require('@napi-rs/canvas');
+const fs = require('fs');
+const path = require('path');
 
 const client = new Client({
     intents: [
@@ -15,13 +17,31 @@ const client = new Client({
 // CONFIGURACIÓN DE IDs Y TOKEN
 // -------------------------------------------------------------
 const STAFF_ROLE_ID = '1532166214225494206';       // Rol de Staff
-const SPECIAL_ROLE_ID = '1481400404033011786';     // Nuevo rol autorizado
+const SPECIAL_ROLE_ID = '1481400404033011786';     // Rol Especial
 const OWNER_ID = '1286812839465717772';             // Tu ID (Marcos)
 const USER_ROLE_TO_LOCK = '1532166292130500648';    // Rol a bloquear
 const TOKEN = process.env.DISCORD_TOKEN;
 
-// Guardado dinámico de configuración de logs por servidor
-const logChannels = {}; 
+const CONFIG_FILE = path.join(__dirname, 'logsConfig.json');
+let logChannels = {}; 
+
+// Cargar configuración de logs desde el archivo si existe
+if (fs.existsSync(CONFIG_FILE)) {
+    try {
+        logChannels = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    } catch (e) {
+        console.error('Error al cargar logsConfig.json:', e);
+    }
+}
+
+function saveLogConfig() {
+    try {
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(logChannels, null, 2));
+    } catch (e) {
+        console.error('Error al guardar logsConfig.json:', e);
+    }
+}
+
 // Imagen de bienvenida de Pinterest
 const WELCOME_BACKGROUND_URL = 'https://i.pinimg.com/1200x/c6/f9/2f/c6f92f691b52ca0967ce7a3705ef776d.jpg';
 
@@ -37,9 +57,8 @@ const commands = [
             .setRequired(true)
             .addChoices(
                 { name: '🌐 Todos los logs (Incluye Bienvenidas)', value: 'todos_los_logs' },
-                { name: '🛑 Todos menos Bienvenida', value: 'todos_menos_bienvenida' },
                 { name: '🖼️ Solo Bienvenida con Imagen', value: 'bienvenida_imagen' },
-                { name: '🔨 Solo Sanciones/Moderación', value: 'logs_bans' },
+                { name: '🔨 Solo Sanciones/Moderación/Mensajes', value: 'logs_bans' },
                 { name: '🎙️ Solo Canales y Voz', value: 'logs_canales' },
                 { name: '🎭 Solo Gestión de Roles', value: 'logs_roles' }
             )),
@@ -118,15 +137,39 @@ client.once('ready', async () => {
     }
 });
 
-// Función para obtener el canal de logs según la categoría configurada
 function getLogChannel(guildId, category) {
     const config = logChannels[guildId];
     if (!config) return null;
     if (config.types.includes('todos_los_logs')) return config.channelId;
-    if (config.types.includes('todos_menos_bienvenida') && category !== 'bienvenida_imagen') return config.channelId;
     if (config.types.includes(category)) return config.channelId;
     return null;
 }
+
+// -------------------------------------------------------------
+// LOG DE MENSAJES ELIMINADOS
+// -------------------------------------------------------------
+client.on('messageDelete', async (message) => {
+    if (!message.guild || message.author?.bot) return;
+
+    const logId = getLogChannel(message.guild.id, 'logs_bans');
+    if (!logId) return;
+    const logChannel = message.guild.channels.cache.get(logId);
+    if (!logChannel) return;
+
+    const content = message.content ? message.content : '*[Mensaje sin texto o archivo adjunto]*';
+
+    const embed = new EmbedBuilder()
+        .setTitle('🗑️ MENSAJE ELIMINADO')
+        .setColor(0xE74C3C)
+        .addFields(
+            { name: 'Autor', value: `${message.author} (${message.author.tag})`, inline: true },
+            { name: 'Canal', value: `${message.channel}`, inline: true },
+            { name: 'Contenido', value: content.length > 1024 ? content.slice(0, 1021) + '...' : content }
+        )
+        .setTimestamp();
+
+    await logChannel.send({ embeds: [embed] }).catch(() => {});
+});
 
 // -------------------------------------------------------------
 // SISTEMA DE TARJETA DE BIENVENIDA CON CANVAS
@@ -142,15 +185,12 @@ client.on('guildMemberAdd', async (member) => {
         const canvas = createCanvas(1200, 675);
         const ctx = canvas.getContext('2d');
 
-        // Fondo
         const background = await loadImage(WELCOME_BACKGROUND_URL);
         ctx.drawImage(background, 0, 0, canvas.width, canvas.height);
 
-        // Capa oscura para legibilidad
         ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Borde circular del Avatar
         ctx.save();
         ctx.beginPath();
         ctx.arc(600, 230, 105, 0, Math.PI * 2, true);
@@ -159,7 +199,6 @@ client.on('guildMemberAdd', async (member) => {
         ctx.strokeStyle = '#FFFFFF';
         ctx.stroke();
 
-        // Recorte circular para el Avatar
         ctx.beginPath();
         ctx.arc(600, 230, 100, 0, Math.PI * 2, true);
         ctx.closePath();
@@ -170,7 +209,6 @@ client.on('guildMemberAdd', async (member) => {
         ctx.drawImage(avatar, 500, 130, 200, 200);
         ctx.restore();
 
-        // Textos
         ctx.fillStyle = '#FFFFFF';
         ctx.font = 'bold 50px sans-serif';
         ctx.textAlign = 'center';
@@ -185,7 +223,12 @@ client.on('guildMemberAdd', async (member) => {
         ctx.fillText(`Eres el miembro #${member.guild.memberCount}`, 600, 540);
 
         const attachment = new AttachmentBuilder(await canvas.encode('png'), { name: 'bienvenida.png' });
-        await channel.send({ content: `👋 ¡Bienvenido/a al servidor ${member}!`, files: [attachment] });
+        
+        // Mensaje personalizado solicitando la bienvenida
+        await channel.send({ 
+            content: `Bienvenid@ A Los Angeles Español Roleplay I Community Custom ${member}`, 
+            files: [attachment] 
+        });
 
     } catch (error) {
         console.error('Error al generar la tarjeta de bienvenida:', error);
@@ -398,7 +441,6 @@ client.on('interactionCreate', async (interaction) => {
     const hasStaffRole = member.roles.cache.has(STAFF_ROLE_ID);
     const hasSpecialRole = member.roles.cache.has(SPECIAL_ROLE_ID);
 
-    // Permite ejecutar si es Owner, si tiene el rol de Staff o el nuevo Rol Especial
     if (!isOwner && !hasStaffRole && !hasSpecialRole) {
         return interaction.reply({ content: '❌ No tienes permisos para usar este comando.', ephemeral: true });
     }
@@ -417,6 +459,7 @@ client.on('interactionCreate', async (interaction) => {
                 channelId: targetChannel.id,
                 types: [logType]
             };
+            saveLogConfig();
 
             await interaction.reply({ content: `✅ Canal ${targetChannel} configurado con éxito para registrar **${logType}**.` });
 
