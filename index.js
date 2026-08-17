@@ -15,6 +15,7 @@ const client = new Client({
 // CONFIGURACIÓN DE IDs Y TOKEN
 // -------------------------------------------------------------
 const STAFF_ROLE_ID = '1532166214225494206';       // Rol de Staff
+const SPECIAL_ROLE_ID = '1481400404033011786';     // Nuevo rol autorizado
 const OWNER_ID = '1286812839465717772';             // Tu ID (Marcos)
 const USER_ROLE_TO_LOCK = '1532166292130500648';    // Rol a bloquear
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -395,8 +396,10 @@ client.on('interactionCreate', async (interaction) => {
     const { commandName, options, guild, user: staff, member, channel } = interaction;
     const isOwner = staff.id === OWNER_ID;
     const hasStaffRole = member.roles.cache.has(STAFF_ROLE_ID);
+    const hasSpecialRole = member.roles.cache.has(SPECIAL_ROLE_ID);
 
-    if (!isOwner && !hasStaffRole) {
+    // Permite ejecutar si es Owner, si tiene el rol de Staff o el nuevo Rol Especial
+    if (!isOwner && !hasStaffRole && !hasSpecialRole) {
         return interaction.reply({ content: '❌ No tienes permisos para usar este comando.', ephemeral: true });
     }
 
